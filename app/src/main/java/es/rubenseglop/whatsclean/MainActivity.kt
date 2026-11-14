@@ -81,7 +81,8 @@ data class VideoEntry(
 data class VisualAnalysis(
     val protectedSignal: Boolean,
     val labels: List<String>,
-    val framesAnalyzed: Int
+    val framesAnalyzed: Int,
+    val errorMessage: String? = null
 )
 
 class MainActivity : ComponentActivity() {
@@ -218,6 +219,8 @@ private fun WhatsCleanScreen() {
                                             try {
                                                 val resultMap = analyses.toMutableMap()
                                                 for (video in targets) {
+                                                    // Un archivo inaccesible o con formato no compatible no debe
+                                                    // interrumpir el análisis del resto de la biblioteca.
                                                     resultMap[video.id] = withContext(Dispatchers.IO) {
                                                         analyzeVideo(context, video, labeler)
                                                     }
@@ -342,12 +345,27 @@ private fun VideoRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (analysis != null) {
-                    Text(
-                        if (analysis.protectedSignal) "Posibles personas o mascotas: PROTEGER"
-                        else "Sin señales personales claras: revisar manualmente",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (analysis.protectedSignal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (analysis.errorMessage != null) {
+                        Text(
+                            "No se pudo analizar: CONSERVAR",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            analysis.errorMessage,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2
+                        )
+                    } else {
+                        Text(
+                            if (analysis.protectedSignal) "Posibles personas o mascotas: PROTEGER"
+                            else if (analysis.framesAnalyzed == 0) "No se pudieron extraer fotogramas: CONSERVAR"
+                            else "Sin señales personales claras: revisar manualmente",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (analysis.protectedSignal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (analysis.labels.isNotEmpty()) {
                         Text(
                             "Detectado: ${analysis.labels.take(4).joinToString(", ")}",
@@ -408,6 +426,7 @@ private fun analyzeVideo(
     val retriever = MediaMetadataRetriever()
     val labels = linkedMapOf<String, Float>()
     var framesAnalyzed = 0
+    var extractionError: String? = null
     try {
         retriever.setDataSource(context, video.uri)
         val durationUs = video.durationMs.coerceAtLeast(1) * 1000L
@@ -429,8 +448,25 @@ private fun analyzeVideo(
                 bitmap.recycle()
             }
         }
+        if (framesAnalyzed == 0) {
+            extractionError = "Android no pudo extraer fotogramas de este archivo."
+        }
+    } catch (error: Exception) {
+        extractionError = error.localizedMessage ?: error.javaClass.simpleName
     } finally {
-        retriever.release()
+        try {
+            retriever.release()
+        } catch (_: Exception) {
+            // La liberación no debe detener el análisis de otros vídeos.
+        }
+    }
+    if (extractionError != null) {
+        return VisualAnalysis(
+            protectedSignal = false,
+            labels = emptyList(),
+            framesAnalyzed = framesAnalyzed,
+            errorMessage = extractionError
+        )
     }
     val personalSignals = setOf(
         "person", "people", "human", "face", "selfie", "crowd",
