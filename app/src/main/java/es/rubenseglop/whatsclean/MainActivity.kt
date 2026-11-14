@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -119,7 +120,7 @@ private fun WhatsCleanScreen() {
     val protectedVideos = videos.filter { analyses[it.id]?.protectedSignal == true }
     val reviewVideos = videos.filter {
         val result = analyses[it.id]
-        result != null && !result.protectedSignal
+        result != null && result.errorMessage == null && result.framesAnalyzed > 0 && !result.protectedSignal
     }
     val unanalyzedCount = videos.count { analyses[it.id] == null }
 
