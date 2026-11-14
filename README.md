@@ -19,3 +19,10 @@ Aplicación Android local para inventariar vídeos recibidos y ayudar a detectar
 ## Versionado
 
 Cada actualización debe incrementar `versionCode` y actualizar `versionName` en `app/build.gradle.kts`.
+
+
+## Análisis visual local (1.1.0)
+
+La aplicación incorpora el modelo ML Kit Image Labeling dentro de la APK. Analiza hasta tres fotogramas representativos por vídeo y muestra las etiquetas visuales detectadas. El procesamiento se realiza en el dispositivo y no requiere descargar el modelo al primer uso.
+
+La detección de personas o mascotas genera una señal conservadora de protección. Si no aparecen esas señales, el vídeo queda para revisión manual: **no se clasifica como basura**. WhatsClean no elimina ni modifica archivos.
