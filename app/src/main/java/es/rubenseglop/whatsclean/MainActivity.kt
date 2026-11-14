@@ -3,8 +3,10 @@ package es.rubenseglop.whatsclean
 import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.util.Size
 import android.os.Bundle
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
@@ -18,7 +20,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Movie
@@ -27,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -73,6 +84,7 @@ private fun WhatsCleanScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var videos by remember { mutableStateOf<List<VideoEntry>>(emptyList()) }
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var hasScanned by remember { mutableStateOf(false) }
     var isScanning by remember { mutableStateOf(false) }
     var permissionGranted by remember { mutableStateOf(hasVideoPermission(context)) }
@@ -84,6 +96,7 @@ private fun WhatsCleanScreen() {
             errorMessage = null
             try {
                 videos = withContext(Dispatchers.IO) { queryVideos(context) }
+                selectedIds = emptySet()
                 hasScanned = true
             } catch (error: Exception) {
                 errorMessage = error.localizedMessage ?: "No se ha podido leer la biblioteca multimedia."
@@ -166,7 +179,31 @@ private fun WhatsCleanScreen() {
                         SummaryCard("Espacio ocupado", if (hasScanned) formatBytes(videos.sumOf { it.size }) else "—", Modifier.weight(1f))
                     }
 
-                    Text("Biblioteca de vídeos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Biblioteca de vídeos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (selectedIds.isEmpty()) "Selecciona los vídeos que quieras revisar"
+                                else "${selectedIds.size} seleccionados",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Todos", style = MaterialTheme.typography.labelMedium)
+                            Checkbox(
+                                checked = videos.isNotEmpty() && selectedIds.size == videos.size,
+                                onCheckedChange = { checked ->
+                                    selectedIds = if (checked) videos.map { it.id }.toSet() else emptySet()
+                                },
+                                enabled = videos.isNotEmpty() && !isScanning
+                            )
+                        }
+                    }
                     when {
                         isScanning -> Column(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -184,7 +221,13 @@ private fun WhatsCleanScreen() {
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(videos, key = { it.id }) { video ->
-                                VideoRow(video)
+                                VideoRow(
+                                    video = video,
+                                    selected = video.id in selectedIds,
+                                    onSelectedChange = { checked ->
+                                        selectedIds = if (checked) selectedIds + video.id else selectedIds - video.id
+                                    }
+                                )
                             }
                         }
                     }
@@ -213,16 +256,18 @@ private fun SummaryCard(label: String, value: String, modifier: Modifier = Modif
 }
 
 @androidx.compose.runtime.Composable
-private fun VideoRow(video: VideoEntry) {
+private fun VideoRow(
+    video: VideoEntry,
+    selected: Boolean,
+    onSelectedChange: (Boolean) -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.medium) {
-                Icon(Icons.Default.Movie, contentDescription = null, modifier = Modifier.padding(12.dp))
-            }
+            VideoThumbnail(video)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(video.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 2)
                 Text(
@@ -231,6 +276,42 @@ private fun VideoRow(video: VideoEntry) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Checkbox(checked = selected, onCheckedChange = onSelectedChange)
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun VideoThumbnail(video: VideoEntry) {
+    val context = LocalContext.current
+    val bitmap by produceState<Bitmap?>(initialValue = null, key1 = video.uri) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                context.contentResolver.loadThumbnail(video.uri, Size(320, 220), null)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+    Surface(
+        modifier = Modifier.size(width = 104.dp, height = 72.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = "Vista previa de ${video.name}",
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Icon(
+                Icons.Default.Movie,
+                contentDescription = "Miniatura no disponible",
+                modifier = Modifier.padding(20.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer
+            )
         }
     }
 }
