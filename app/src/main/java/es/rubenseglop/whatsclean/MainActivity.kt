@@ -94,10 +94,10 @@ private fun WhatsCleanScreen() {
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        permissionGranted = granted
-        if (granted) scan()
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        permissionGranted = results.values.any { it } || hasVideoPermission(context)
+        if (permissionGranted) scan()
     }
 
     LaunchedEffect(Unit) {
@@ -148,12 +148,15 @@ private fun WhatsCleanScreen() {
                             Text("Necesitamos permiso para ver tus vídeos")
                             Text("Solo se utiliza para crear el inventario local. No se envían archivos a Internet.")
                             Button(onClick = {
-                                val permission = if (Build.VERSION.SDK_INT >= 33) {
-                                    Manifest.permission.READ_MEDIA_VIDEO
-                                } else {
-                                    Manifest.permission.READ_EXTERNAL_STORAGE
+                                val permissions = when {
+                                    Build.VERSION.SDK_INT >= 34 -> arrayOf(
+                                        Manifest.permission.READ_MEDIA_VIDEO,
+                                        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+                                    )
+                                    Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+                                    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
                                 }
-                                permissionLauncher.launch(permission)
+                                permissionLauncher.launch(permissions)
                             }) { Text("Dar permiso y analizar") }
                         }
                     }
@@ -233,6 +236,14 @@ private fun VideoRow(video: VideoEntry) {
 }
 
 private fun hasVideoPermission(context: android.content.Context): Boolean {
+    if (Build.VERSION.SDK_INT >= 34) {
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_MEDIA_VIDEO
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+    }
     val permission = if (Build.VERSION.SDK_INT >= 33) {
         Manifest.permission.READ_MEDIA_VIDEO
     } else {
