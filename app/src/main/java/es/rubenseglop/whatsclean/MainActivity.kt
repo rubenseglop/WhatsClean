@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.util.Size
@@ -40,6 +41,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -59,6 +61,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeler
+import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -69,6 +76,12 @@ data class VideoEntry(
     val durationMs: Long,
     val dateAddedSeconds: Long,
     val uri: Uri
+)
+
+data class VisualAnalysis(
+    val protectedSignal: Boolean,
+    val labels: List<String>,
+    val framesAnalyzed: Int
 )
 
 class MainActivity : ComponentActivity() {
@@ -85,6 +98,9 @@ private fun WhatsCleanScreen() {
     val scope = rememberCoroutineScope()
     var videos by remember { mutableStateOf<List<VideoEntry>>(emptyList()) }
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var analyses by remember { mutableStateOf<Map<Long, VisualAnalysis>>(emptyMap()) }
+    var isAnalyzing by remember { mutableStateOf(false) }
+    var analysisProgress by remember { mutableStateOf(0) }
     var hasScanned by remember { mutableStateOf(false) }
     var isScanning by remember { mutableStateOf(false) }
     var permissionGranted by remember { mutableStateOf(hasVideoPermission(context)) }
@@ -97,6 +113,7 @@ private fun WhatsCleanScreen() {
             try {
                 videos = withContext(Dispatchers.IO) { queryVideos(context) }
                 selectedIds = emptySet()
+                analyses = emptyMap()
                 hasScanned = true
             } catch (error: Exception) {
                 errorMessage = error.localizedMessage ?: "No se ha podido leer la biblioteca multimedia."
@@ -179,6 +196,53 @@ private fun WhatsCleanScreen() {
                         SummaryCard("Espacio ocupado", if (hasScanned) formatBytes(videos.sumOf { it.size }) else "—", Modifier.weight(1f))
                     }
 
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Análisis visual con IA en el dispositivo", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Examina fotogramas de los vídeos seleccionados (o de toda la biblioteca si no seleccionas ninguno). El modelo funciona sin conexión. Detectar personas o mascotas activa una señal de protección; no detectar nada nunca significa que el vídeo sea basura.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            isAnalyzing = true
+                                            analysisProgress = 0
+                                            val targets = if (selectedIds.isEmpty()) videos else videos.filter { it.id in selectedIds }
+                                            val labeler = ImageLabeling.getClient(
+                                                ImageLabelerOptions.Builder()
+                                                    .setConfidenceThreshold(0.55f)
+                                                    .build()
+                                            )
+                                            try {
+                                                val resultMap = analyses.toMutableMap()
+                                                for (video in targets) {
+                                                    resultMap[video.id] = withContext(Dispatchers.IO) {
+                                                        analyzeVideo(context, video, labeler)
+                                                    }
+                                                    analyses = resultMap.toMap()
+                                                    analysisProgress++
+                                                }
+                                            } catch (error: Exception) {
+                                                errorMessage = "No se pudo completar el análisis: ${error.localizedMessage ?: "error desconocido"}"
+                                            } finally {
+                                                labeler.close()
+                                                isAnalyzing = false
+                                            }
+                                        }
+                                    },
+                                    enabled = !isAnalyzing && videos.isNotEmpty()
+                                ) {
+                                    Text(if (isAnalyzing) "Analizando…" else "Analizar con IA")
+                                }
+                                if (isAnalyzing) {
+                                    Text("$analysisProgress / ${if (selectedIds.isEmpty()) videos.size else selectedIds.size}")
+                                }
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -226,7 +290,8 @@ private fun WhatsCleanScreen() {
                                     selected = video.id in selectedIds,
                                     onSelectedChange = { checked ->
                                         selectedIds = if (checked) selectedIds + video.id else selectedIds - video.id
-                                    }
+                                    },
+                                    analysis = analyses[video.id]
                                 )
                             }
                         }
@@ -259,7 +324,8 @@ private fun SummaryCard(label: String, value: String, modifier: Modifier = Modif
 private fun VideoRow(
     video: VideoEntry,
     selected: Boolean,
-    onSelectedChange: (Boolean) -> Unit
+    onSelectedChange: (Boolean) -> Unit,
+    analysis: VisualAnalysis?
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -275,6 +341,24 @@ private fun VideoRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (analysis != null) {
+                    Text(
+                        if (analysis.protectedSignal) "Posibles personas o mascotas: PROTEGER"
+                        else "Sin señales personales claras: revisar manualmente",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (analysis.protectedSignal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (analysis.labels.isNotEmpty()) {
+                        Text(
+                            "Detectado: ${analysis.labels.take(4).joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2
+                        )
+                    }
+                } else {
+                    Text("Pendiente de análisis", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             Checkbox(checked = selected, onCheckedChange = onSelectedChange)
         }
@@ -314,6 +398,53 @@ private fun VideoThumbnail(video: VideoEntry) {
             )
         }
     }
+}
+
+private fun analyzeVideo(
+    context: android.content.Context,
+    video: VideoEntry,
+    labeler: ImageLabeler
+): VisualAnalysis {
+    val retriever = MediaMetadataRetriever()
+    val labels = linkedMapOf<String, Float>()
+    var framesAnalyzed = 0
+    try {
+        retriever.setDataSource(context, video.uri)
+        val durationUs = video.durationMs.coerceAtLeast(1) * 1000L
+        val samplePoints = listOf(0.15, 0.5, 0.85)
+        for (point in samplePoints) {
+            val bitmap = retriever.getFrameAtTime(
+                (durationUs * point).toLong(),
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            ) ?: continue
+            try {
+                val image = InputImage.fromBitmap(bitmap, 0)
+                val frameLabels = Tasks.await(labeler.process(image))
+                framesAnalyzed++
+                frameLabels.forEach { item ->
+                    val old = labels[item.text] ?: 0f
+                    if (item.confidence > old) labels[item.text] = item.confidence
+                }
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    } finally {
+        retriever.release()
+    }
+    val personalSignals = setOf(
+        "person", "people", "human", "face", "selfie", "crowd",
+        "child", "baby", "man", "woman", "boy", "girl",
+        "dog", "cat", "pet", "puppy", "kitten", "horse"
+    )
+    val protected = labels.keys.any { label ->
+        personalSignals.any { signal -> label.lowercase(Locale.ROOT).contains(signal) }
+    }
+    return VisualAnalysis(
+        protectedSignal = protected,
+        labels = labels.entries.sortedByDescending { it.value }.take(6).map { it.key },
+        framesAnalyzed = framesAnalyzed
+    )
 }
 
 private fun hasVideoPermission(context: android.content.Context): Boolean {
