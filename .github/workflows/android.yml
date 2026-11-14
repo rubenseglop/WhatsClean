@@ -27,7 +27,9 @@ jobs:
             echo "No se encontró sdkmanager en $ANDROID_HOME"
             exit 1
           fi
-          yes | "$SDKMANAGER" --licenses
+          # sdkmanager closes stdin after accepting all licenses; yes may report
+          # a harmless Broken pipe, so do not fail the workflow on that SIGPIPE.
+          yes | "$SDKMANAGER" --licenses || true
           "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
