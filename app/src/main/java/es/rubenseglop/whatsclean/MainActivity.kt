@@ -300,7 +300,7 @@ private fun WhatsCleanScreen() {
 
                 if (permissionGranted && hasScanned && !isScanning) {
                     Text(
-                        "En WhatsClean, ante la duda se conserva. La clasificación inteligente y la limpieza llegarán después de validar bien la protección de vídeos personales.",
+                        "En WhatsClean, ante la duda se conserva. Las etiquetas de IA son orientativas: un vídeo sin personas detectadas no se considera basura.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -438,7 +438,7 @@ private fun analyzeVideo(
         "dog", "cat", "pet", "puppy", "kitten", "horse"
     )
     val protected = labels.keys.any { label ->
-        personalSignals.any { signal -> label.lowercase(Locale.ROOT).contains(signal) }
+        label.lowercase(Locale.ROOT) in personalSignals
     }
     return VisualAnalysis(
         protectedSignal = protected,
